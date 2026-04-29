@@ -1,0 +1,10 @@
+admins:
+  - name: admin_oleg
+    state: present
+    role: superadmin
+
+  - name: admin_test_remove
+    state: absent
+    role: superadmin
+    comment: "Temporary - testing offboard"
+    

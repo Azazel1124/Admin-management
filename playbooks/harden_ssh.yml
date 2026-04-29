@@ -1,0 +1,84 @@
+---
+- name: Harden SSH configuration
+  hosts: vpn_nodes
+  become: true
+  serial: 10
+  max_fail_percentage: 0
+  gather_facts: false
+
+  pre_tasks:
+    - name: Verify admin_oleg can sudo before locking down
+      ansible.builtin.command: "sudo -u admin_oleg -n true"
+      changed_when: false
+      check_mode: false
+      tags: [always]
+
+    - name: Verify authorized_keys exists for admin_oleg
+      ansible.builtin.stat:
+        path: "/home/admin_oleg/.ssh/authorized_keys"
+      register: ak_check
+      failed_when: not ak_check.stat.exists or ak_check.stat.size == 0
+      check_mode: false
+      tags: [always]
+
+  tasks:
+    - name: Backup sshd_config before changes
+      ansible.builtin.copy:
+        src: /etc/ssh/sshd_config
+        dest: "/etc/ssh/sshd_config.bak.{{ ansible_date_time.date | default(lookup('pipe', 'date +%Y-%m-%d')) }}"
+        remote_src: true
+        force: false
+      tags: [backup]
+
+    - name: Set PermitRootLogin no
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^[#\s]*PermitRootLogin\s+\S+'
+        line: "PermitRootLogin no"
+        insertafter: '^#\s*Authentication:'
+        state: present
+        validate: "/usr/sbin/sshd -t -f %s"
+      notify: restart sshd
+
+    - name: Set PasswordAuthentication no
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^[#\s]*PasswordAuthentication\s+(yes|no)'
+        line: "PasswordAuthentication no"
+        insertafter: '^[#\s]*PermitRootLogin'
+        state: present
+        validate: "/usr/sbin/sshd -t -f %s"
+      notify: restart sshd
+
+    - name: Set KbdInteractiveAuthentication no
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^[#\s]*KbdInteractiveAuthentication\s+(yes|no)'
+        line: "KbdInteractiveAuthentication no"
+        insertafter: '^[#\s]*PasswordAuthentication'
+        state: present
+        validate: "/usr/sbin/sshd -t -f %s"
+      notify: restart sshd
+
+    - name: Find sshd_config.d override files
+      ansible.builtin.find:
+        paths: /etc/ssh/sshd_config.d/
+        patterns: "*.conf"
+      register: sshd_overrides
+
+    - name: Neutralize cloud-init / vendor sshd overrides
+      ansible.builtin.replace:
+        path: "{{ item.path }}"
+        regexp: '^(PasswordAuthentication\s+yes|PermitRootLogin\s+yes|PermitRootLogin\s+prohibit-password)'
+        replace: '# \1  # disabled by ansible'
+        validate: "/usr/sbin/sshd -t -f /etc/ssh/sshd_config"
+      loop: "{{ sshd_overrides.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      notify: restart sshd
+
+  handlers:
+    - name: restart sshd
+      ansible.builtin.service:
+        name: ssh
+        state: restarted

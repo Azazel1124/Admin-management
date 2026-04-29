@@ -1,0 +1,127 @@
+---
+- name: Manage admin users across fleet
+  hosts: vpn_nodes
+  become: true
+  serial: 10
+  max_fail_percentage: 0
+  gather_facts: true
+
+  tasks:
+    - name: Validate all pubkeys exist on controller
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../files/admins/{{ item.name }}.pub"
+      loop: "{{ admins | selectattr('state', 'eq', 'present') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: pubkey_stats
+      failed_when: not pubkey_stats.stat.exists
+      
+
+    - name: Update apt cache (Debian/Ubuntu)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_pkg_mgr == 'apt'
+      tags: [bootstrap]
+
+    - name: Ensure hostname resolves locally
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1\s'
+        line: "127.0.1.1 {{ ansible_facts['fqdn'] }} {{ ansible_facts['hostname'] }}"
+        state: present
+      tags: [bootstrap]
+
+    - name: Ensure sudo is installed
+      ansible.builtin.package:
+        name: sudo
+        state: present
+      tags: [bootstrap]
+
+    - name: Set safe default TERM for unknown terminals
+      ansible.builtin.copy:
+        dest: /etc/profile.d/term-fallback.sh
+        content: |
+          # Fallback if client TERM is unknown
+          if ! infocmp "$TERM" >/dev/null 2>&1; then
+            export TERM=xterm-256color
+          fi
+        mode: "0644"
+      
+    - name: Create admin users
+      ansible.builtin.user:
+        name: "{{ item.name }}"
+        shell: /bin/bash
+        create_home: true
+        password_lock: true
+        state: present
+      loop: "{{ admins | selectattr('state', 'eq', 'present') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [user]
+
+    - name: Harden home permissions
+      ansible.builtin.file:
+        path: "/home/{{ item.name }}"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: "0700"
+      loop: "{{ admins | selectattr('state', 'eq', 'present') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [user]
+
+    - name: Install authorized_key (exclusive)
+      ansible.posix.authorized_key:
+        user: "{{ item.name }}"
+        state: present
+        exclusive: true
+        key: "{{ lookup('file', playbook_dir + '/../files/admins/' + item.name + '.pub') }}"
+      loop: "{{ admins | selectattr('state', 'eq', 'present') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [ssh_key]
+
+    - name: Grant sudo via dedicated sudoers dropin
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/10-{{ item.name }}"
+        content: "{{ item.name }} ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
+      loop: "{{ admins | selectattr('state', 'eq', 'present') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [sudo]
+
+    - name: Remove sudoers dropin for departed admins
+      ansible.builtin.file:
+        path: "/etc/sudoers.d/10-{{ item.name }}"
+        state: absent
+      loop: "{{ admins | selectattr('state', 'eq', 'absent') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [offboard]
+
+    - name: Remove departed admin users
+      ansible.builtin.user:
+        name: "{{ item.name }}"
+        state: absent
+        remove: true
+        force: true
+      loop: "{{ admins | selectattr('state', 'eq', 'absent') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [offboard]
+
+    - name: Verify sudo works for active admins
+      ansible.builtin.command: "sudo -u {{ item.name }} -n true"
+      changed_when: false
+      loop: "{{ admins | selectattr('state', 'eq', 'present') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [verify]
