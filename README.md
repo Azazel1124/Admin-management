@@ -1,5 +1,4 @@
 
-````markdown
 # ansible-admins
 
 Управление учётными записями администраторов на флоте VPS-нод и базовое
@@ -450,24 +449,3 @@ ssh-keygen -lf files/admins/admin_<name>.pub
 Repository maintained by team. Issues, PRs welcome.
 
 License: MIT
-````
-
-## Самый простой способ
-
-Создай README через heredoc, чтобы не возиться с экранированием:
-
-````bash
-cd ~/.ansible/ansible-admins
-
-# скачай напрямую если есть где
-# или просто открой редактор и вставь содержимое выше КАК ЕСТЬ
-
-vim README.md
-# нажми i для вставки
-# вставь содержимое (Shift+Insert или Ctrl+Shift+V в зависимости от терминала)
-# Esc, :wq для сохранения
-
-git add README.md
-git commit --amend --no-edit
-git push --force-with-lease
-````
